@@ -63,16 +63,17 @@ def _build_sample_repo_zip(zip_path, prefix="googletv-kodi-setup-main/kodi/"):
 
 class TestGitHubAPI(unittest.TestCase):
     @mock.patch("resources.lib.github_api._request_json")
-    def test_fetch_branches_sorts_main_first(self, mock_req):
+    def test_fetch_branches_sorts_dev_and_main_first(self, mock_req):
         mock_req.return_value = [
             {"name": "feature-test", "commit": {"sha": "11111112222222"}, "protected": False},
             {"name": "main", "commit": {"sha": "abcdef1234567890"}, "protected": True},
+            {"name": "dev", "commit": {"sha": "22222223333333"}, "protected": False},
             {"name": "beta", "commit": {"sha": "99999998888888"}, "protected": False},
         ]
         branches = github_api.fetch_branches("Maximilianus1110", "googletv-kodi-setup")
-        self.assertEqual([b["name"] for b in branches], ["main", "beta", "feature-test"])
-        self.assertEqual(branches[0]["short_sha"], "abcdef1")
-        self.assertTrue(branches[0]["protected"])
+        self.assertEqual([b["name"] for b in branches], ["dev", "main", "beta", "feature-test"])
+        self.assertEqual(branches[1]["short_sha"], "abcdef1")
+        self.assertTrue(branches[1]["protected"])
 
     @mock.patch("resources.lib.github_api._request_json")
     def test_fetch_branch_details_parses_commit(self, mock_req):
@@ -295,6 +296,17 @@ class TestInstaller(unittest.TestCase):
             with open(os.path.join(legacy_addon, "addon.xml"), "w", encoding="utf-8") as f:
                 f.write("<addon/>")
 
+            stale_skin_cache = os.path.join(
+                kodi_home,
+                "addons",
+                "skin.arctic.fuse.2",
+                "1080i",
+                "script-skinvariables-generator-includes--kodiprofile-old123.xml",
+            )
+            os.makedirs(os.path.dirname(stale_skin_cache), exist_ok=True)
+            with open(stale_skin_cache, "w", encoding="utf-8") as f:
+                f.write("<includes/>")
+
             guisettings = os.path.join(kodi_home, "userdata", "guisettings.xml")
             os.makedirs(os.path.dirname(guisettings), exist_ok=True)
             with open(guisettings, "w", encoding="utf-8") as f:
@@ -314,6 +326,7 @@ class TestInstaller(unittest.TestCase):
             self.assertIn("skin.arctic.fuse.2", res["addons_updated"])
             self.assertIn("Trakt-Token (TMDb Helper)", res["restored_credentials"])
             self.assertFalse(os.path.exists(legacy_addon))
+            self.assertFalse(os.path.exists(stale_skin_cache))
 
             # Excluded files must NOT be extracted
             self.assertFalse(
