@@ -93,6 +93,58 @@ class TestGitHubAPI(unittest.TestCase):
         self.assertEqual(details["author"], "Max")
         self.assertEqual(details["date"], "2026-11-27 10:15")
 
+    def test_fallback_to_git_refs_and_atom_on_rate_limit(self):
+        fake_refs = (
+            "001e# service=git-upload-pack\n"
+            "00000159cae82a105bedcaea920eb6b9c436d7d6d48f4037 HEAD\x00multi_ack\n"
+            "00654302096ed664afd307cab646d77fc377aac94e87 refs/heads/feature/osd-test\n"
+            "003dcae82a105bedcaea920eb6b9c436d7d6d48f4037 refs/heads/main\n"
+            "0000"
+        ).encode("utf-8")
+        fake_atom = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<feed xmlns="http://www.w3.org/2005/Atom">'
+            "<entry>"
+            "<id>tag:github.com,2008:Grit::Commit/4302096ed664afd307cab646d77fc377aac94e87</id>"
+            "<title>Truncated title</title>"
+            "<updated>2026-11-27T10:54:26Z</updated>"
+            "<author><name>Maximilianus1110</name></author>"
+            "<content type=\"html\">&lt;pre&gt;Full commit message from Atom feed&lt;/pre&gt;</content>"
+            "</entry>"
+            "</feed>"
+        ).encode("utf-8")
+
+        class FakeHTTPResp:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def read(self):
+                return self._payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        with mock.patch(
+            "resources.lib.github_api._request_json",
+            side_effect=github_api.GitHubAPIError("Rate limit"),
+        ):
+            with mock.patch("urllib.request.urlopen", return_value=FakeHTTPResp(fake_refs)):
+                branches = github_api.fetch_branches("Maximilianus1110", "googletv-kodi-setup")
+                self.assertEqual([b["name"] for b in branches], ["main", "feature/osd-test"])
+                self.assertEqual(branches[1]["short_sha"], "4302096")
+
+            with mock.patch("urllib.request.urlopen", return_value=FakeHTTPResp(fake_atom)):
+                det = github_api.fetch_branch_details(
+                    "Maximilianus1110", "googletv-kodi-setup", "feature/osd-test"
+                )
+                self.assertEqual(det["short_sha"], "4302096")
+                self.assertEqual(det["message"], "Full commit message from Atom feed")
+                self.assertEqual(det["author"], "Maximilianus1110")
+                self.assertEqual(det["date"], "2026-11-27 10:54")
+
     def test_download_branch_zip_and_cancel(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_zip = os.path.join(tmpdir, "sample.zip")
