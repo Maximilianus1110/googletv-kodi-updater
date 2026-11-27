@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 import zipfile
+import xml.etree.ElementTree as ET
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
@@ -536,6 +537,60 @@ class TestUIAndServiceWorkflows(unittest.TestCase):
             self.assertTrue(installer.clear_stream_failures(kodi_home))
             self.assertFalse(os.path.exists(fail_file))
             self.assertFalse(installer.clear_stream_failures(kodi_home))
+
+
+class TestTraktTokenSelfClosingRegression(unittest.TestCase):
+    """Regression: self-closing <setting id="trakt_token" ... /> must not swallow following settings."""
+
+    SETTINGS_XML = (
+        '<settings version="2">\n'
+        '    <setting id="default_player_movies">xstream.json play_movie</setting>\n'
+        '    <setting id="trakt_token" default="true" />\n'
+        '    <setting id="omdb_apikey" default="true" />\n'
+        '    <setting id="omdb_apikey_access" default="true">false</setting>\n'
+        '    <setting id="sync_provider_watched">trakt</setting>\n'
+        '</settings>'
+    )
+
+    def test_extract_returns_empty_for_self_closing(self):
+        self.assertEqual(backup_manager.extract_trakt_token_from_xml(self.SETTINGS_XML), "")
+
+    def test_extract_and_inject_real_token(self):
+        xml_with_token = self.SETTINGS_XML.replace(
+            '<setting id="trakt_token" default="true" />',
+            '<setting id="trakt_token">REAL_TOKEN_123</setting>',
+        )
+        self.assertEqual(backup_manager.extract_trakt_token_from_xml(xml_with_token), "REAL_TOKEN_123")
+        injected = backup_manager.inject_trakt_token_into_xml(self.SETTINGS_XML, "REAL_TOKEN_123")
+        root = ET.fromstring(injected)
+        ids = {s.get("id"): (s.text or "") for s in root.findall("setting")}
+        self.assertEqual(ids["trakt_token"], "REAL_TOKEN_123")
+        self.assertEqual(ids["omdb_apikey_access"], "false")
+        self.assertEqual(ids["default_player_movies"], "xstream.json play_movie")
+
+    def test_inject_rejects_markup_token(self):
+        bad = '<setting id="omdb_apikey" default="true" />'
+        self.assertEqual(backup_manager.inject_trakt_token_into_xml(self.SETTINGS_XML, bad), self.SETTINGS_XML)
+
+    def test_full_install_keeps_settings_valid(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            zip_path = os.path.join(tmpdir, "branch.zip")
+            prefix = "googletv-kodi-setup-dev/kodi/"
+            with zipfile.ZipFile(zip_path, "w") as zf:
+                zf.writestr(prefix + "userdata/addon_data/plugin.video.themoviedb.helper/settings.xml", self.SETTINGS_XML)
+                zf.writestr(prefix + "userdata/keymaps/player_controls.xml", "<keymap/>")
+            kodi_home = os.path.join(tmpdir, "kodi_home")
+            tmdb_dir = os.path.join(kodi_home, "userdata", "addon_data", "plugin.video.themoviedb.helper")
+            os.makedirs(tmdb_dir, exist_ok=True)
+            with open(os.path.join(tmdb_dir, "settings.xml"), "w", encoding="utf-8") as f:
+                f.write(self.SETTINGS_XML)
+            installer.install_from_zip(zip_path, kodi_home, mode="full", do_backup=False)
+            with open(os.path.join(tmdb_dir, "settings.xml"), encoding="utf-8") as f:
+                result = f.read()
+            root = ET.fromstring(result)
+            ids = {s.get("id"): (s.text or "") for s in root.findall("setting")}
+            self.assertEqual(ids["default_player_movies"], "xstream.json play_movie")
+            self.assertEqual(ids["sync_provider_watched"], "trakt")
 
 
 if __name__ == "__main__":
